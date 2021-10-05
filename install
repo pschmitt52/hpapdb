@@ -1,0 +1,337 @@
+#!/bin/bash
+#===============================================================================
+#
+#          FILE:  install.sh
+# 
+#         USAGE:  ./install  [install_directory]
+# 
+#   DESCRIPTION:  Install hpapdb utilities
+# 
+#       OPTIONS:  install directory
+#  REQUIREMENTS:  dialog
+#         NOTES:  New and improved with dialog
+#                 190401: Added reminder to closing message
+#                         Put quotes around password in .my.cnf
+#        AUTHOR:  Pete Schmitt (debtfree), pschmitt@upenn.edu
+#       COMPANY:  University of Pennsylvania
+#       VERSION:  0.2.2
+#       CREATED:  Thu Feb 21 14:53:38 EST 2019
+#      REVISION:  Mon Apr  1 14:13:30 EDT 2019
+#===============================================================================
+TITLE="HPAP Database Sync Installer"
+RB="[1;31m"
+GB="[1;32m"
+CL="[0m"
+################################################################################
+function syntax 
+{
+    echo
+    echo "$GB./install [install_directory] (default: $HOME/bin)$CL"
+    echo
+    exit 0
+}
+################################################################################
+function goodbye
+{
+    FORTUNE=$HOME/.fortune
+    if test "$1" = ""
+    then
+        fortune > $FORTUNE
+    else
+        echo $1 > $FORTUNE
+    fi
+    len=`wc -l $FORTUNE | cut -f1 -d' '`
+    width=`wc -L $FORTUNE | cut -f1 -d' '`
+
+	dialog --backtitle "$TITLE" --title "Goodbye..." --infobox \
+        "`cat $FORTUNE`" $((3+$len)) $((width+4))
+    sleep $((4+$len))
+	clear
+	rm -f $ANS
+	exit 1
+}
+###############################################################################
+# start here
+
+if test "$1" = "-h"
+then
+    syntax
+    exit 0
+fi
+
+dialog --backtitle "$TITLE" \
+       --title "Continue?" \
+       --yesno \
+       "This program will install the HPAP Database Sync software.
+
+   Do you want to continue?" 9 55
+if test "$?" -ne 0
+then
+    goodbye
+fi
+
+#
+# check for custom INSTDIR
+#
+if test "$1" = ""
+then
+    INSTDIR=$HOME/bin
+else
+    INSTDIR=$1
+fi
+
+dialog --backtitle "$TITLE" \
+       --title "Continue?" \
+       --yesno \
+       "You have chosen to install this software in 
+$INSTDIR.  
+
+This path will be added to your \$PATH variable
+in your $HOME/.bashrc file if it doesn't 
+already exist.
+       
+   Do you want to continue?" 13 60
+if test "$?" -ne 0
+then
+    goodbye
+fi
+
+LIBEXEC=$INSTDIR/hpapdb
+#
+# create config file that will be sourced by syncdb
+#
+echo "export BIN=$INSTDIR" > $HOME/.hpapdb.cnf
+echo "export LIB=$LIBEXEC" >> $HOME/.hpapdb.cnf
+#
+# Test .my.cnf and respond
+#
+if test -f $HOME/.my.cnf
+then
+    chmod 600 $HOME/.my.cnf
+else
+
+    dialog --backtitle "$TITLE" \
+           --title "Continue?" \
+           --yesno \
+           "You need a $HOME/.my.cnf file for MySQL passwordless access. 
+           
+           Do you want to create one?" 9 55
+           if test "$?" -ne 0
+           then
+               goodbye
+           fi
+
+    dialog --backtitle "$TITLE" \
+           --title "MySQL Username" \
+           --inputbox "Enter your MySQL Username" 6 55 2> $HOME/.answer
+           Uname=`cat $HOME/.answer`
+           if test "$Uname" = ""
+           then
+                goodbye "No username entered"
+           fi
+
+    dialog --backtitle "$TITLE" \
+           --title "MySQL Password" \
+           --passwordbox "Enter your MySQL Password (will not echo)" \
+             6 55 2> $HOME/.answer
+           Upass="`cat $HOME/.answer`"
+           if test "$Upass" = ""
+           then
+                goodbye "No password entered"
+           fi
+
+    dialog --backtitle "$TITLE" \
+           --title "Verify MySQL Password" \
+           --passwordbox "Re-enter your MySQL Password (will not echo)" \
+             6 55 2> $HOME/.answer
+           Vpass=`cat $HOME/.answer`
+           if test "$Vpass" = ""
+           then
+                goodbye "No verify password entered" 
+           fi
+           if test "$Upass" != "$Vpass"
+           then
+                goodbye "Verified password does not match password entered"
+           fi
+
+    sed "s/uXXXXXX/$Uname/" < templates/my.cnf > .my.cnf.user
+    sed "s/pXXXXXX/\"$Upass\"/" < .my.cnf.user > $HOME/.my.cnf
+    rm -f .my.cnf.user
+    chmod 600 $HOME/.my.cnf
+
+    dialog --backtitle "$TITLE" \
+           --ok-label " Continue " \
+           --msgbox "$HOME/.my.cnf installed" 5 55
+
+fi
+#
+# check INSTDIR in $PATH
+#
+if 
+    echo $PATH | grep $INSTDIR > /dev/null
+then
+    pathyn="n"
+elif
+    grep "PATH=$PATH" $HOME/.bashrc > /dev/null
+then
+    pathyn="n"
+else
+
+    dialog --backtitle "$TITLE" \
+           --title "Not in PATH" \
+           --yesno \
+        " $INSTDIR is NOT in your \$PATH 
+
+        Do you want to add $INSTDIR to your \$PATH?" 9 55
+        if test "$?" -ne 0
+        then
+            goodbye "Software will not function correctly"
+        else
+            pathyn="Y"
+        fi
+
+fi
+#
+# check INSTDIR exists and directory
+#
+if test -d $INSTDIR
+then
+    diryn="n"
+    mkdir -p $INSTDIR/hpapdb  # create support directory
+else
+    diryn="Y"
+fi
+#
+# Check with the user if they want to proceed.
+#
+dialog --backtitle "$TITLE" \
+       --title "Install software?" \
+       --yesno \
+        "Are you ready to install the software?" 5 55
+
+        if test "$?" -ne 0
+        then
+            goodbye "Not ready to install software"
+        fi
+
+#
+# Add INSTDIR path to end of $HOME/.bashrc if necessary
+#
+if test $pathyn = "Y"
+then
+    PATH2APPEND="export PATH=${INSTDIR}:\$PATH"
+    echo "$PATH2APPEND" >> ~/.bashrc
+
+    echo $p | dialog --backtitle "$TITLE" \
+                     --msgbox "Added $INSTDIR to \$PATH" 10 55
+
+fi
+#
+# make INSTDIR if necessary
+#
+if test $diryn = "Y"
+then
+    mkdir -p $INSTDIR/hpapdb
+
+    echo $p | dialog --backtitle "$TITLE" \
+                     --msgbox "Created $INSTDIR ..." 10 55
+
+fi
+#
+#  Copy supporting programs to LIBEXEC
+#
+p=0
+echo $p | dialog --backtitle "$TITLE"  --gauge \
+         " Starting the install..." 10 70 0
+sleep 1
+
+for i in *.sh 
+do
+    sleep 1
+    p=$((p+13))
+    F=$i
+    if test -f ${LIBEXEC}/$F
+    then
+        if 
+            cmp $i ${LIBEXEC}/$F > /dev/null
+        then
+            echo $p | dialog --backtitle "$TITLE" \
+                             --gauge \
+                "$i already current in
+                ${LIBEXEC}/$F" 10 70 0
+            continue
+        fi
+
+        dialog --backtitle "$TITLE" \
+               --title "Overwrite?" \
+               --yesno \
+        "There is a new $F.  Overwrite existing ${F}?" 9 70
+        if test "$?" -ne 0
+        then
+            goodbye "Software needs to be updated to operate properly"
+        fi
+
+        echo $p | dialog --backtitle "$TITLE" \
+                         --gauge \
+            "$i updated in
+            ${LIBEXEC}/$F" 10 70 0
+
+        cp -f $i ${LIBEXEC}/$F
+    else
+
+        echo $p | dialog --backtitle "$TITLE" \
+                         --gauge \
+            "$i installed in
+            ${LIBEXEC}/$F" 10 70 0
+
+        cp -f $i ${LIBEXEC}/$F
+    fi
+done
+p=100
+#
+# Install syncdb
+#
+sleep 1
+F=syncdb
+if test -f $INSTDIR/syncdb
+then
+    if 
+        cmp syncdb $INSTDIR/syncdb > /dev/null
+    then
+
+        echo $p | dialog --backtitle "$TITLE" \
+                         --gauge \
+            "syncdb already current in 
+            ${INSTDIR}/$F" 10 70 0
+
+    else
+
+        dialog --backtitle "$TITLE" \
+               --title "Overwrite?" \
+               --yesno \
+        "There is a new $F. Overwrite existing ${F}?" 9 70
+
+        if test "$?" -ne 0
+        then
+            goodbye "Software needs to be updated to operate properly"
+        else
+            cp -f syncdb $INSTDIR
+
+            echo $p | dialog --backtitle "$TITLE" \
+                             --gauge \
+                "syncdb updated in
+                ${INSTDIR}/$F" 10 70 0
+        fi
+    fi
+else
+    cp -v syncdb $INSTDIR
+
+    echo $p | dialog --backtitle "$TITLE" \
+                     --gauge \
+        "syncb installed in
+        ${INSTDIR}/$F" 10 70 0
+
+fi
+sleep 2
+goodbye "Install Complete: 
+Now do the other server if you haven't already done so."

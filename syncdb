@@ -1,0 +1,290 @@
+#!/bin/bash
+#===============================================================================
+#
+#          FILE:  syncdb.sh
+#
+#         USAGE:  ./syncdb.sh
+#
+#   DESCRIPTION:
+#
+#       OPTIONS:  skip, to skip opening message
+#  REQUIREMENTS:  ---
+#       UPDATES:  181116: Added compare tables
+#                 190118: Added sync to remote
+#                 190303: Added progress for updating remote or local schema
+#                 190328: Fixed logic to pull database/table names from remote
+#                         when specifying a pull
+#                 190329: Added option to use different remote server
+#                 190401: Remove .cmpstatus when no longer needed
+#        AUTHOR:  Pete Schmitt (debtfree), pschmitt@upenn.edu
+#       COMPANY:  University of Pennsylvania
+#       VERSION:  0.2.6
+#       CREATED:  10/12/2018 11:16:36 EDT
+#      REVISION:  Mon Apr  1 11:31:47 EDT 2019
+#===============================================================================
+SCRIPT=`basename ${BASH_SOURCE[0]}`
+BOLD='[1;31m'
+REV='[1;32m'
+OFF='[0m'
+###############################################################################
+function goodbye
+{
+    FORTUNE=$HOME/.fortune
+    fortune > $FORTUNE
+    len=`wc -l $FORTUNE | cut -f1 -d' '`
+    width=`wc -L $FORTUNE | cut -f1 -d' '`
+
+	dialog --backtitle "$TITLE" --title "Goodbye..." --infobox \
+        "`cat $FORTUNE`" $((3+$len)) $((width+4))
+    sleep $((5+$len))
+	clear
+	rm -f $ANS
+	exit 1
+}
+###############################################################################
+function HELP {
+    echo
+    echo -en "${REV}Basic syntax:${OFF} ${BOLD}$SCRIPT "
+    echo -e "-r <remote server> "
+    echo
+    echo -e "${REV}The following switches are recognized. $OFF "
+    echo -e "${REV}-r ${OFF}  Remote server name"
+    echo -e "${REV}-h ${OFF}  Displays this help message."
+    echo
+    exit 1
+}
+################################################################################
+#
+#
+# get options
+#
+while getopts r:h FLAG
+do
+    case $FLAG in
+        h)
+            HELP
+            ;;
+        r)
+            REM=$OPTARG
+            ;;
+        *)
+            echo -e "Option not available."
+            sleep 1.5
+            HELP
+            ;;
+    esac
+done
+################################################################################
+if test -f $HOME/.hpapdb.cnf
+then
+    source $HOME/.hpapdb.cnf
+else
+    echo "No configuration file.  You need to reinstall."
+    goodbye
+fi
+
+ANS="$HOME/.answer"
+export TITLE="HPAP Database Syncer"
+#
+# determine local and remote server names
+# modified for a test environment
+#
+H=`hostname -s`
+if test $H = 'hpap'
+then
+    R='hpap-dev'
+elif test $H = 'hpap-dev'
+then
+    R='hpap'
+else
+    R='gemini'
+fi
+#
+# force remote server from -r option
+#
+if test -n "$REM"
+then
+    R=$REM
+fi
+#
+# START USER INPUT HERE
+#
+if test "$1" != "skip"
+then
+    dialog --backtitle "$TITLE" --title 'Continue?' --yesno \
+	    "This program will sync the MySQL databases between the HPAP production \
+         and development servers.
+
+    Do you want to continue?" 9 55
+    # Return status of non-zero indicates no
+    if test "$?" -ne 0
+    then
+  	    goodbye
+    fi
+else
+    R=$2
+fi
+#
+# Which direction?
+#
+dialog --backtitle "$TITLE" --radiolist \
+    "The local host is ${H}. \nSync to or from $R?" 12 50 2 2>$ANS \
+        1 "Pull from $R" off \
+        2 "Push to $R" off
+
+A=`cat $ANS`
+case "$A" in
+    1) direction="from"
+       LOC=remote
+       ;;
+    2) direction="to"
+       LOC=local
+       ;;
+    *) goodbye;;
+esac
+#
+# Get database
+#
+$LIB/create_checklist.sh -t database -D $LOC -r $R
+if test -f $HOME/.selected
+then
+    DB=`cat $HOME/.selected`
+    rm -f $HOME/.selected
+else
+    goodbye
+fi
+#
+# Get list of tables to ignore tables if necessary
+#
+IGNR=false
+dialog --backtitle "$TITLE" --defaultno --yesno \
+    "Do you want to ignore table(s)?" 5 50
+if test "$?" -eq 0
+then
+    IGNR=true
+    $LIB/create_checklist.sh -t table -d $DB -D $LOC -r $R
+    if test -f $HOME/.selected
+    then
+        IGNR=true
+        TBLS=`cat $HOME/.selected`
+        rm -f $HOME/.selected
+    else
+        IGNR=false
+    fi
+fi
+IGTBLS=`echo $TBLS | sed 's/ /,/g'`
+#
+# compare dimensions of tables between servers
+#
+dialog --backtitle "$TITLE" --defaultno --yesno \
+    "Do you want to compare sizes of the tables belonging to $DB?" 6 50
+if test "$?" = "0"
+then
+    $LIB/cmptables.sh -d $DB -r $R -i "$IGTBLS"
+
+    if test -f $HOME/.cmpstatus
+    then
+        dialog --backtitle "$TITLE" \
+               --title "There are difference(s)! Continue?" \
+               --yesno "`cat $HOME/.cmpstatus`
+
+            Continue?" 10 70
+        if test "$?" -ne 0
+        then
+            rm -f $HOME/.cmpstatus
+            goodbye
+        fi
+        rm -f $HOME/.cmpstatus
+    else
+        dialog --backtitle "$TITLE" --title "All tables compare" --infobox \
+            "All tables in $DB between $H and $R have equal dimensions" 5 50
+        sleep 5
+    fi
+fi
+#
+# check if user wants to continue
+#
+MESSAGE="Synchronize schema $DB $direction the ${R} server"
+if test $IGNR = true
+then
+    MESSAGE+=" excluding table(s): $(echo $IGTBLS | sed 's/,/ /g')"
+fi
+MESSAGE+='?'
+dialog --backtitle "$TITLE" --title "Continue?" --yesno \
+           "$MESSAGE" 9 50
+if test "$?" -ne 0
+then
+    goodbye
+fi
+#
+# do dump somewhere
+#
+RHOME=`ssh -q $R pwd`
+RBIN=`ssh -q $R "grep BIN .hpapdb.cnf | cut -f2 -d="`
+RLIB=`ssh -q $R "grep LIB .hpapdb.cnf | cut -f2 -d="`
+
+if test "$direction" = "from"
+then
+    echo 25 | dialog --backtitle "$TITLE" --gauge "Running dump on $R" 10 70 0
+    sleep 1.5
+    if test "$IGNR" = true
+    then
+        ssh -q $R $RLIB/dumpdb.sh -d $DB -p $RHOME -t "$IGTBLS"
+    else
+        ssh -q $R $RLIB/dumpdb.sh -d $DB -p $RHOME 
+    fi
+    echo 50 | dialog --backtitle "$TITLE" \
+                     --gauge "Retrieving dump from $R" 10 70 0
+    sleep 1.5
+    scp -q ${R}:.${DB}.sql $HOME
+    echo 75 | dialog --backtitle "$TITLE" \
+                     --gauge "Restoring dump to $H" 10 70 0
+    sleep 1.5
+    $LIB/restoredb.sh -f $HOME/.${DB}.sql
+    echo 100 | dialog --backtitle "$TITLE" \
+                      --gauge "Cleaning up on $H and $R" 10 70 0
+    sleep 1.5
+    ssh -q $R "rm -f $RHOME/.${DB}.sql"
+    rm -f $HOME/.${DB}.sql
+    UH=$H
+
+elif test "$direction" = "to"
+then
+    echo 25 | dialog --backtitle "$TITLE" --gauge "Running dump on $H" 10 70 0
+    sleep 1.5
+    if test "$IGNR" = true
+    then
+        $LIB/dumpdb.sh -d $DB -p $HOME -t "$IGTBLS"
+    else
+        $LIB/dumpdb.sh -d $DB -p $HOME
+    fi
+    echo 50 | dialog --backtitle "$TITLE" \
+                     --gauge "Pushing dump to $R" 10 70 0
+    sleep 1.5
+    scp -q $HOME/.${DB}.sql ${R}:
+    echo 75 | dialog --backtitle "$TITLE" \
+                     --gauge "Restoring dump on $R" 10 70 0
+    ssh -q $R $RLIB/restoredb.sh -f $RHOME/.${DB}.sql
+    sleep 1.5
+    echo 100 | dialog --backtitle "$TITLE" \
+                      --gauge "Cleaning up on $H and $R" 10 70 0
+    ssh -q $R "rm -f $RHOME/.${DB}.sql"
+    sleep 1.5
+    rm -f $HOME/.${DB}.sql
+    UH=$R
+fi
+
+dialog --backtitle "$TITLE" \
+       --title "Database update complete" \
+       --defaultno --yesno \
+    "Database, $DB, updated on $UH
+    Do more operations?" 7 50
+if test "$?" -ne 0
+then
+    goodbye
+fi
+$BIN/syncdb skip $R
+exit 0
+################################################################################
+################################################################################
+################################################################################
