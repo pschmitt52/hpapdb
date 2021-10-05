@@ -20,6 +20,7 @@ To install:
 ```
 git clone https://github.com/pschmitt52/hpapdb
 cd hpapdb
+chmod +x install
 ./install [install directory] 
 ```
 - The package will be installed in `$HOME/bin` if `[install directory]` 
