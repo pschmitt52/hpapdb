@@ -1,6 +1,5 @@
 # hpapdb
-Scripts to sync the hpap MySQL schemas between the production and development 
-servers
+Scripts to sync MySQL schemas between servers.
 
 Requirements on both servers:
 
