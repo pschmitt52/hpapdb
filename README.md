@@ -18,7 +18,7 @@ host = localhost
 ```
 To install: 
 ```
-git clone https://github.com/Epistasislab/hpapdb
+git clone https://github.com/pschmitt52/hpapdb
 cd hpapdb
 ./install [install directory] 
 ```
